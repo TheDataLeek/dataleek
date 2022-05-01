@@ -1,0 +1,107 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+        <meta charset="utf-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+        <meta name="generator" content="Pelican" />
+        <title>Dataleek - Python</title>
+        <link rel="stylesheet" href="/theme/css/main.css" />
+</head>
+
+<body id="index" class="home">
+        <header id="banner" class="body">
+                <h1><a href="/">Dataleek</a></h1>
+                <nav><ul>
+                    <li><a href="/category/data-science.html">Data Science</a></li>
+                    <li class="active"><a href="/category/python.html">Python</a></li>
+                </ul></nav>
+        </header><!-- /#banner -->
+
+            <aside id="featured" class="body">
+                <article>
+                    <h1 class="entry-title"><a href="/a-quick-guide-to-forking-in-python.html">A Quick Guide to `fork`ing in Python</a></h1>
+<footer class="post-info">
+        <abbr class="published" title="2017-10-24T00:00:00-06:00">
+                Published: Tue 24 October 2017
+        </abbr>
+
+        <address class="vcard author">
+                By                         <a class="url fn" href="/author/zoe-farmer.html">Zoe Farmer</a>
+        </address>
+<p>In <a href="/category/python.html">Python</a>.</p>
+
+</footer><!-- /.post-info --><p>Paralellization usually is pretty tricky in python, however there’s a super easy way to implement pretty straightforward
+parallelization using the built-in <code>os.fork()</code> functionality.</p>
+<p>Let’s talk about what <code>os.fork()</code> actually does. In short, it simply creates an additional copy (referred to as the
+“child process”) of the running program at the same(ish) spot as the “parent process”. These are separate processes, so
+they have completely different memory allocated for them (and cannot share variables).</p>
+<p>This lack of internal communication means that this is best suited for having a single piece of code concurrently spin
+up a separate task that has some external communication method (files, network, etc.) or one that doesn’t have any
+communication requirements whatsoever.</p>
+<p>When <code>os.fork()</code> is called, it returns back a different number depending on whether or not it’s the child or parent
+process. For the child, the result of <code>os.fork()</code> is the number <code>0</code>. For the parent the result is the <code>pid</code> of the child
+process.</p>
+<div class="highlight"><pre><span></span><code><span class="kn">import</span> <span class="nn">os</span><span class="o">,</span> <span class="nn">signal</span>
+
+<span class="n">pid</span> <span class="o">=</span> <span class="n">os</span><span class="o">.</span><span class="n">fork</span><span class="p">()</span>
+<span class="k">if</span> <span class="n">pid</span> <span class="o">==</span> <span class="mi">0</span><span class="p">:</span>
+    <span class="c1"># have the child do a thing</span>
+<span class="k">else</span><span class="p">:</span>
+    <span class="c1"># have the parent do a thing</span>
+    <span class="n">os</span><span class="o">.</span><span class="n">kill</span><span class="p">(</span><span class="n">pid</span><span class="p">,</span> <span class="n">signal</span><span class="o">.</span><span class="n">SIGINT</span><span class="p">)</span>
+</code></pre></div>
+
+<p>I use this for spinning up a webserver and then running integration tests against it in the same codebase without having
+to shell out. A good example is the <a href="http://www.boulderpython.org/">Boulder Python Meetup website</a>. This <a href="https://github.com/boulder-python/boulderpython.org">code is
+available on github</a> but here’s the relevant code snippet:</p>
+<div class="highlight"><pre><span></span><code><span class="k">def</span> <span class="nf">main</span><span class="p">(</span><span class="n">args</span><span class="p">:</span> <span class="n">argparse</span><span class="o">.</span><span class="n">Namespace</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">int</span><span class="p">:</span>
+    <span class="n">configure</span><span class="p">(</span><span class="n">os</span><span class="o">.</span><span class="n">getenv</span><span class="p">(</span><span class="s1">&#39;FLASK_CONFIG&#39;</span><span class="p">)</span> <span class="ow">or</span> <span class="s1">&#39;default&#39;</span><span class="p">)</span>
+
+    <span class="n">status</span> <span class="o">=</span> <span class="kc">True</span>
+    <span class="k">if</span> <span class="n">args</span><span class="o">.</span><span class="n">test</span> <span class="ow">is</span> <span class="kc">True</span><span class="p">:</span>
+        <span class="n">pid</span> <span class="o">=</span> <span class="n">os</span><span class="o">.</span><span class="n">fork</span><span class="p">()</span>
+        <span class="k">if</span> <span class="n">pid</span> <span class="o">==</span> <span class="mi">0</span><span class="p">:</span>
+            <span class="n">status</span> <span class="o">=</span> <span class="n">run_server</span><span class="p">(</span><span class="n">mode</span><span class="o">=</span><span class="s1">&#39;debug&#39;</span><span class="p">)</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="k">try</span><span class="p">:</span>
+                <span class="n">status</span> <span class="o">=</span> <span class="n">pytest</span><span class="o">.</span><span class="n">main</span><span class="p">([</span><span class="s1">&#39;tests&#39;</span><span class="p">])</span>
+            <span class="k">except</span><span class="p">:</span>  <span class="c1"># trust me this is ok</span>
+                <span class="k">pass</span>
+            <span class="n">os</span><span class="o">.</span><span class="n">kill</span><span class="p">(</span><span class="n">pid</span><span class="p">,</span> <span class="n">signal</span><span class="o">.</span><span class="n">SIGINT</span><span class="p">)</span>
+    <span class="k">elif</span> <span class="p">(</span><span class="n">args</span> <span class="ow">is</span> <span class="ow">not</span> <span class="kc">None</span><span class="p">)</span> <span class="ow">and</span> <span class="p">(</span><span class="n">args</span><span class="o">.</span><span class="n">debug</span> <span class="ow">or</span> <span class="n">app</span><span class="o">.</span><span class="n">debug</span><span class="p">):</span>
+        <span class="n">status</span> <span class="o">=</span> <span class="n">run_server</span><span class="p">(</span><span class="n">mode</span><span class="o">=</span><span class="s1">&#39;debug&#39;</span><span class="p">)</span>
+    <span class="k">else</span><span class="p">:</span>
+        <span class="n">status</span> <span class="o">=</span> <span class="n">run_server</span><span class="p">(</span><span class="n">mode</span><span class="o">=</span><span class="s1">&#39;prod&#39;</span><span class="p">)</span>
+    <span class="k">return</span> <span class="n">status</span>
+</code></pre></div>                </article>
+            </aside><!-- /#featured -->
+        <section id="extras" class="body">
+                <div class="blogroll">
+                        <h2>links</h2>
+                        <ul>
+                            <li><a href="https://getpelican.com/">Pelican</a></li>
+                            <li><a href="https://www.python.org/">Python.org</a></li>
+                            <li><a href="https://palletsprojects.com/p/jinja/">Jinja2</a></li>
+                            <li><a href="#">You can modify those links in your config file</a></li>
+                        </ul>
+                </div><!-- /.blogroll -->
+                <div class="social">
+                        <h2>social</h2>
+                        <ul>
+
+                            <li><a href="#">You can add links in your config file</a></li>
+                            <li><a href="#">Another social link</a></li>
+                        </ul>
+                </div><!-- /.social -->
+        </section><!-- /#extras -->
+
+        <footer id="contentinfo" class="body">
+                <address id="about" class="vcard body">
+                Proudly powered by <a href="https://getpelican.com/">Pelican</a>, which takes great advantage of <a href="https://www.python.org/">Python</a>.
+                </address><!-- /#about -->
+
+                <p>The theme is by <a href="https://www.smashingmagazine.com/2009/08/designing-a-html-5-layout-from-scratch/">Smashing Magazine</a>, thanks!</p>
+        </footer><!-- /#contentinfo -->
+
+</body>
+</html>

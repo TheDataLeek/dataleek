@@ -1,0 +1,246 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+        <meta charset="utf-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+        <meta name="generator" content="Pelican" />
+        <title>Twitter Civil Unrest Analysis with Apache Spark</title>
+        <link rel="stylesheet" href="/theme/css/main.css" />
+        <meta name="description" content="Note from May 2022 This article is quite old, some links may be broken! Use at your own risk! Introduction On Monday I attended the CU Boulder..." />
+</head>
+
+<body id="index" class="home">
+        <header id="banner" class="body">
+                <h1><a href="/">Dataleek</a></h1>
+                <nav><ul>
+                    <li class="active"><a href="/category/data-science.html">Data Science</a></li>
+                    <li><a href="/category/python.html">Python</a></li>
+                </ul></nav>
+        </header><!-- /#banner -->
+<section id="content" class="body">
+  <article>
+    <header>
+      <h1 class="entry-title">
+        <a href="/twitter-civil-unrest-analysis-with-apache-spark.html" rel="bookmark"
+           title="Permalink to Twitter Civil Unrest Analysis with Apache Spark">Twitter Civil Unrest Analysis with Apache Spark</a></h1>
+    </header>
+
+    <div class="entry-content">
+<footer class="post-info">
+        <abbr class="published" title="2015-04-29T00:00:00-06:00">
+                Published: Wed 29 April 2015
+        </abbr>
+
+        <address class="vcard author">
+                By                         <a class="url fn" href="/author/zoe-farmer.html">Zoe Farmer</a>
+        </address>
+<p>In <a href="/category/data-science.html">Data Science</a>.</p>
+
+</footer><!-- /.post-info -->      <h1>Note from May 2022</h1>
+<p>This article is quite old, some links may be broken! Use at your own risk!</p>
+<h1>Introduction</h1>
+<p>On Monday I attended the CU Boulder Computer Science Senior Projects Expo, and there was one project in particular that
+I thought was pretty neat: determining areas of civil unrest through Twitter post analysis. They had some pretty cool
+visuals and used Apache Spark, so I figured I’d try to recreate it on my own. What follows is an initial prototype
+attempt as a proof of concept. I’ll go through each step included here, but I’ve also included the code on
+my <a href="https://github.com/TheDataLeek/TwitterPanic">github profile</a>, so feel free to clone and run it.</p>
+<p>Again, this is a result that I was able to put together in just a couple days, so it’s not completely fleshed out. This
+means that my solution is not a pretty solution, but instead a solution that shows that a project of this nature is not
+only feasible, but scalable using Spark. For reasons I will go into later, the video demo is at 4x speed.</p>
+<p>The final result is pretty neat. (Press the play button on the below animation).</p>
+<video controls width=100%>
+<source src="/images/demosped.webm" type="video/webm">
+</video>
+
+<h1>General Approach</h1>
+<p>The steps for this project are fairly straightforward.</p>
+<ol>
+<li><strong>First establish the data, either in streaming or static form.</strong> For a static data form, this is relatively simple
+   since nothing changes and our analysis can be performed all at once. For this project I chose to use a streaming data
+   source in order to have a more adaptive solution. This solution can scale from either a small file or stream to
+   gigabytes of data.</li>
+<li><strong>Perform the analysis.</strong> Since we’re using Spark, this analysis is done using functional techniques and is scalable
+   depending on the system you’ve set up.</li>
+<li><strong>Display the results.</strong> This is completely up to the analyst as different approaches will have different strengths
+   and weaknesses. A generally accepted way (that would be another step for this project) is to use D3, a javascript
+   library, to display the data. Right now I use Cartopy.</li>
+</ol>
+<h1>PySpark Streaming</h1>
+<p>One initial design choice that I made was to create a streaming program that constantly runs and produces results. This
+means that the best approach is Spark’s streaming API. As with any other Spark program I first created a SparkContext
+object, and since I’m set up on my laptop (with 4 workers)
+I designated the program to use the local Spark instance. After I instantiated the SparkContext I created a
+StreamingContext object and established a batch interval, which is simply the interval at which the streaming API will
+update.</p>
+<div class="highlight"><pre><span></span><code><span class="n">sc</span>  <span class="o">=</span> <span class="n">SparkContext</span><span class="p">(</span><span class="s1">&#39;local[4]&#39;</span><span class="p">,</span> <span class="s1">&#39;Social Panic Analysis&#39;</span><span class="p">)</span>
+<span class="n">ssc</span> <span class="o">=</span> <span class="n">StreamingContext</span><span class="p">(</span><span class="n">sc</span><span class="p">,</span> <span class="n">BATCH_INTERVAL</span><span class="p">)</span>
+</code></pre></div>
+
+<p>Once the setup code is complete, the stream can be started by setting a default “blank” RDD, and creating a new
+queueStream whose default contents is the blank RDD.</p>
+<div class="highlight"><pre><span></span><code><span class="n">rdd</span> <span class="o">=</span> <span class="n">ssc</span><span class="o">.</span><span class="n">sparkContext</span><span class="o">.</span><span class="n">parallelize</span><span class="p">([</span><span class="mi">0</span><span class="p">])</span>
+<span class="n">stream</span> <span class="o">=</span> <span class="n">ssc</span><span class="o">.</span><span class="n">queueStream</span><span class="p">([],</span> <span class="n">default</span><span class="o">=</span><span class="n">rdd</span><span class="p">)</span>
+</code></pre></div>
+
+<p>At this point the stream consists of a single entry: an RDD with contents <code>[0]</code>. To convert it to a usable stream, I
+applied a flat map over every element in the stream. This mapping process converts each element currently in the stream
+to a new RDD that contains the next chunk of Twitter data. (Note, you could absolutely have a ton of elements in your
+blank RDD to start, which would mean that you’re pulling in data over each one of those elements. I did not do that due
+to Twitter’s Rate Limiting, which I’ll go over more in depth later.)</p>
+<div class="highlight"><pre><span></span><code><span class="n">stream</span> <span class="o">=</span> <span class="n">stream</span><span class="o">.</span><span class="n">transform</span><span class="p">(</span><span class="n">tfunc</span><span class="p">)</span>
+</code></pre></div>
+
+<p>Analysis is now performed on the streaming object! (I’ll cover this more in depth later)</p>
+<div class="highlight"><pre><span></span><code><span class="n">coord_stream</span> <span class="o">=</span> <span class="p">(</span>
+    <span class="n">stream</span>
+        <span class="o">.</span><span class="n">map</span><span class="p">(</span><span class="k">lambda</span> <span class="n">line</span><span class="p">:</span> <span class="n">ast</span><span class="o">.</span><span class="n">literal_eval</span><span class="p">(</span><span class="n">line</span><span class="p">))</span>
+        <span class="o">.</span><span class="n">filter</span><span class="p">(</span><span class="n">filter_posts</span><span class="p">)</span>
+        <span class="o">.</span><span class="n">map</span><span class="p">(</span><span class="n">get_coord</span><span class="p">)</span>
+<span class="p">)</span>
+</code></pre></div>
+
+<p>After the analysis is complete, the results are visualized. (Again, I’ll go over this later)</p>
+<div class="highlight"><pre><span></span><code><span class="n">coord_stream</span><span class="o">.</span><span class="n">foreachRDD</span><span class="p">(</span><span class="k">lambda</span> <span class="n">t</span><span class="p">,</span> <span class="n">rdd</span><span class="p">:</span> <span class="n">q</span><span class="o">.</span><span class="n">put</span><span class="p">(</span><span class="n">rdd</span><span class="o">.</span><span class="n">collect</span><span class="p">()))</span>
+</code></pre></div>
+
+<p>Since Spark is lazily evaluated, nothing has been done yet. All that’s been established is the fact that we have some
+data stream and the intent to perform some series of steps on it in our analysis. The final step is to start our stream
+and basically just wait for something to stop it. (Any keyboard interrupt or process termination signal counts.)</p>
+<div class="highlight"><pre><span></span><code><span class="n">ssc</span><span class="o">.</span><span class="n">start</span><span class="p">()</span>
+<span class="n">ssc</span><span class="o">.</span><span class="n">awaitTermination</span><span class="p">()</span>
+</code></pre></div>
+
+<p>And that’s it! Data is now being pulled from our streaming object.</p>
+<h1>Transforming our Data Stream</h1>
+<p>In order to convert our initial blank RDD to twitter data, a flat map is applied over it. This converts each element (
+currently just one) to my stream output.</p>
+<div class="highlight"><pre><span></span><code><span class="k">return</span> <span class="n">rdd</span><span class="o">.</span><span class="n">flatMap</span><span class="p">(</span><span class="k">lambda</span> <span class="n">x</span><span class="p">:</span> <span class="n">stream_twitter_data</span><span class="p">())</span>
+</code></pre></div>
+
+<p>The stream output is determined by the contents of the following streaming
+endpoint, <code>https://stream.twitter.com/1.1/statuses/filter.json?language=en&amp;locations=-130,20,-60,50</code></p>
+<p>This restricts my results to English tweets over a bounding box that is mostly just the United States. (You could remove
+the bounding box option, but since the only language I know is English I wanted to be able to accurately parse the
+results.) A more complete guide to the Twitter API is located on their site.</p>
+<p>The response object that we get when we use the stream=True option with the python requests library has an iterable
+object. I iterate over those lines, yield them, and after receiving a set number of tweets I break and terminate the
+request. If I run into any hiccups along the way, for the purpose of this prototype, they are just printed out for
+visual debugging.</p>
+<div class="highlight"><pre><span></span><code><span class="n">response</span>  <span class="o">=</span> <span class="n">requests</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="n">query_url</span><span class="p">,</span> <span class="n">auth</span><span class="o">=</span><span class="n">config</span><span class="o">.</span><span class="n">auth</span><span class="p">,</span> <span class="n">stream</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+<span class="nb">print</span><span class="p">(</span><span class="n">query_url</span><span class="p">,</span> <span class="n">response</span><span class="p">)</span>
+<span class="n">count</span> <span class="o">=</span> <span class="mi">0</span>
+<span class="k">for</span> <span class="n">line</span> <span class="ow">in</span> <span class="n">response</span><span class="o">.</span><span class="n">iter_lines</span><span class="p">():</span>
+    <span class="k">try</span><span class="p">:</span>
+        <span class="k">if</span> <span class="n">count</span> <span class="o">&gt;</span> <span class="n">BLOCKSIZE</span><span class="p">:</span>
+            <span class="k">break</span>
+        <span class="n">post</span>     <span class="o">=</span> <span class="n">json</span><span class="o">.</span><span class="n">loads</span><span class="p">(</span><span class="n">line</span><span class="o">.</span><span class="n">decode</span><span class="p">(</span><span class="s1">&#39;utf-8&#39;</span><span class="p">))</span>
+        <span class="n">contents</span> <span class="o">=</span> <span class="p">[</span><span class="n">post</span><span class="p">[</span><span class="s1">&#39;text&#39;</span><span class="p">],</span> <span class="n">post</span><span class="p">[</span><span class="s1">&#39;coordinates&#39;</span><span class="p">],</span> <span class="n">post</span><span class="p">[</span><span class="s1">&#39;place&#39;</span><span class="p">]]</span>
+        <span class="n">count</span>   <span class="o">+=</span> <span class="mi">1</span>
+        <span class="k">yield</span> <span class="nb">str</span><span class="p">(</span><span class="n">contents</span><span class="p">)</span>
+    <span class="k">except</span><span class="p">:</span>
+        <span class="nb">print</span><span class="p">(</span><span class="n">line</span><span class="p">)</span>
+</code></pre></div>
+
+<p>A more complete solution would ideally log these and create workarounds.</p>
+<h1>Analysis</h1>
+<p>Since each element in our resulting RDD is a string representation of a Python object, each line in
+our RDD is mapped to a literal Python object.</p>
+<h1>Python</h1>
+<div class="highlight"><pre><span></span><code><span class="n">coord_stream</span> <span class="o">=</span> <span class="n">stream</span><span class="o">.</span><span class="n">map</span><span class="p">(</span><span class="k">lambda</span> <span class="n">line</span><span class="p">:</span> <span class="n">ast</span><span class="o">.</span><span class="n">literal_eval</span><span class="p">(</span><span class="n">line</span><span class="p">))</span>
+</code></pre></div>
+
+<p>The posts are filtered by its text content. For this project, the filters look for language indicative of social
+unrest. (If you’ll note, this application is not limited to social unrest and many other filters could be applied.) I
+don’t really have the background for the best sentiment analysis, so all I have is a list of keywords as my filtering
+criteria. (I’ve also included the word “http” in there so that in my pool of limited results I actually have some
+content.)</p>
+<div class="highlight"><pre><span></span><code><span class="n">filtered_stream</span> <span class="o">=</span> <span class="n">coord_stream</span><span class="o">.</span><span class="n">filter</span><span class="p">(</span><span class="n">filter_posts</span><span class="p">)</span>
+</code></pre></div>
+
+<p>For a more sophisticated process, implementing word association and natural language processing would produce more
+accurate results. I didn’t implement something along those lines due to personal time and scope constraints. For some
+ideas, <a href="www.umiacs.umd.edu/~saif/WebPages/Abstracts/NRC-SentimentAnalysis.htm">here’s a paper on the subject</a>.</p>
+<div class="highlight"><pre><span></span><code><span class="n">final_stream</span> <span class="o">=</span> <span class="n">filtered_stream</span><span class="o">.</span><span class="n">map</span><span class="p">(</span><span class="n">get_coord</span><span class="p">)</span>
+</code></pre></div>
+
+<p>At this point, the only posts that are left are those that indicate violence which need to be reduced to just their
+geographical coordinates. Once this is complete each point can be plotted.</p>
+<div class="highlight"><pre><span></span><code><span class="n">final_stream</span><span class="o">.</span><span class="n">foreachRDD</span><span class="p">(</span><span class="k">lambda</span> <span class="n">t</span><span class="p">,</span> <span class="n">rdd</span><span class="p">:</span> <span class="n">q</span><span class="o">.</span><span class="n">put</span><span class="p">(</span><span class="n">rdd</span><span class="o">.</span><span class="n">collect</span><span class="p">()))</span>
+</code></pre></div>
+
+<h1>Plotting</h1>
+<p>As you probably noticed, the “plotting” referenced above actually puts the contents of the RDD into a queue. This queue
+is also accessed by the other thread of the program which checks the queue every 5 seconds and pulls data out.</p>
+<p>Cartopy is used for the plotting process, and a new matplotlib figure is set to interactive mode. If there is a new
+entry in the queue, we pull it out and add the points to our figure instance.</p>
+<div class="highlight"><pre><span></span><code><span class="n">plt</span><span class="o">.</span><span class="n">ion</span><span class="p">()</span> <span class="c1"># Interactive mode</span>
+<span class="n">fig</span> <span class="o">=</span> <span class="n">plt</span><span class="o">.</span><span class="n">figure</span><span class="p">(</span><span class="n">figsize</span><span class="o">=</span><span class="p">(</span><span class="mi">30</span><span class="p">,</span> <span class="mi">30</span><span class="p">))</span>
+<span class="n">ax</span> <span class="o">=</span> <span class="n">plt</span><span class="o">.</span><span class="n">axes</span><span class="p">(</span><span class="n">projection</span><span class="o">=</span><span class="n">ccrs</span><span class="o">.</span><span class="n">PlateCarree</span><span class="p">())</span>
+<span class="n">ax</span><span class="o">.</span><span class="n">set_extent</span><span class="p">([</span><span class="o">-</span><span class="mi">130</span><span class="p">,</span> <span class="o">-</span><span class="mi">60</span><span class="p">,</span> <span class="mi">20</span><span class="p">,</span> <span class="mi">50</span><span class="p">])</span>
+<span class="n">ax</span><span class="o">.</span><span class="n">coastlines</span><span class="p">()</span>
+<span class="k">while</span> <span class="kc">True</span><span class="p">:</span>
+    <span class="k">if</span> <span class="n">q</span><span class="o">.</span><span class="n">empty</span><span class="p">():</span>
+        <span class="n">time</span><span class="o">.</span><span class="n">sleep</span><span class="p">(</span><span class="mi">5</span><span class="p">)</span>
+    <span class="k">else</span><span class="p">:</span>
+        <span class="n">data</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">array</span><span class="p">(</span><span class="n">q</span><span class="o">.</span><span class="n">get</span><span class="p">())</span>
+        <span class="k">try</span><span class="p">:</span>
+            <span class="n">ax</span><span class="o">.</span><span class="n">scatter</span><span class="p">(</span><span class="n">data</span><span class="p">[:,</span> <span class="mi">0</span><span class="p">],</span> <span class="n">data</span><span class="p">[:,</span> <span class="mi">1</span><span class="p">],</span> <span class="n">transform</span><span class="o">=</span><span class="n">ccrs</span><span class="o">.</span><span class="n">PlateCarree</span><span class="p">())</span>
+            <span class="n">plt</span><span class="o">.</span><span class="n">draw</span><span class="p">()</span>
+        <span class="k">except</span> <span class="ne">IndexError</span><span class="p">:</span> <span class="c1"># Empty array</span>
+            <span class="k">pass</span>
+</code></pre></div>
+
+<p><img alt="png" src="/images/demoscreen.png"></p>
+<h1>Rate Limiting</h1>
+<p>Because Twitter will only let me query their site 15 times in 15 minutes, I’m restricted in how much actual analysis I
+can do. Not only do I have to use their sample stream, but I can only update once every 60 seconds unless I want to be
+rate limited very quickly, which is why this process is so slow. The next step would be to make this update at a more
+reasonable speed by maintaining the response object that is received from the request. All attempts to make that work
+failed horribly. I’m hoping to get it working at one point, but right now it will just hang and never evaluate anything.</p>
+<h1>Final Thoughts</h1>
+<p>All in all, this was a really neat project. The streaming API still has some kinks to iron out chiefly in the
+documentation. No real tutorials exist for this tool yet, and I had to refer to the unit tests for some of modules I was
+using. Often times, it was the only instance of working code I could find. I’m hoping that this article may help someone
+who decides to work on Spark in the future.</p>
+<p>There is still a ton I could do with this project. Something that I’m planning on doing in the next few weeks (sometime
+after finals finish up) is to implement a static version that acts on a collected data set and shows behavior over the
+last few weeks.</p>
+<p>My visualization is not very pretty. Yes, it gets the job done, but the black coastlines leave a lot to be desired…</p>
+<p>The hope is that the stream will just pass around the response object. Again, I was never quite able to get that part
+implemented, but I think after a few more hours of working with it I can figure out what the problem is.</p>
+<p>Please let my know what you think! Leave comments below or on its github page and I’ll get back to you as quickly as I
+can.</p>
+    </div><!-- /.entry-content -->
+
+  </article>
+</section>
+        <section id="extras" class="body">
+                <div class="blogroll">
+                        <h2>links</h2>
+                        <ul>
+                            <li><a href="https://getpelican.com/">Pelican</a></li>
+                            <li><a href="https://www.python.org/">Python.org</a></li>
+                            <li><a href="https://palletsprojects.com/p/jinja/">Jinja2</a></li>
+                            <li><a href="#">You can modify those links in your config file</a></li>
+                        </ul>
+                </div><!-- /.blogroll -->
+                <div class="social">
+                        <h2>social</h2>
+                        <ul>
+
+                            <li><a href="#">You can add links in your config file</a></li>
+                            <li><a href="#">Another social link</a></li>
+                        </ul>
+                </div><!-- /.social -->
+        </section><!-- /#extras -->
+
+        <footer id="contentinfo" class="body">
+                <address id="about" class="vcard body">
+                Proudly powered by <a href="https://getpelican.com/">Pelican</a>, which takes great advantage of <a href="https://www.python.org/">Python</a>.
+                </address><!-- /#about -->
+
+                <p>The theme is by <a href="https://www.smashingmagazine.com/2009/08/designing-a-html-5-layout-from-scratch/">Smashing Magazine</a>, thanks!</p>
+        </footer><!-- /#contentinfo -->
+
+</body>
+</html>
